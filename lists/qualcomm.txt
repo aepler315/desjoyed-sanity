@@ -1,0 +1,9 @@
+# tier: qualcomm
+# default: off
+# about: Qualcomm (QTI/CAF) side-cars that collect stats or exist for phones. Names come from community debloat lists for Qualcomm phones, NOT from this head unit; triage only shows the ones that are actually installed.
+#
+# package | why | risk
+com.qualcomm.qti.devicestatisticsservice | QTI device statistics collector |
+com.qualcomm.qti.qdma                    | QTI device management agent | Some vendors use it for OTA
+com.qualcomm.qti.logkit.lite             | QTI on-device log collector |
+com.qualcomm.qti.poweroffalarm           | Phone-style power-off alarm. The MCU owns power here |

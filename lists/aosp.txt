@@ -1,0 +1,28 @@
+# tier: aosp
+# default: on
+# about: AOSP leftovers that do nothing useful on a head unit. Disabling any of these is boring and reversible.
+#
+# package | why | risk
+com.android.egg                          | Android version easter egg |
+com.android.printspooler                 | Print spooler. You are not printing from a car |
+com.android.bips                         | Built-in print service |
+com.android.printservice.recommendation  | Print service recommender |
+com.google.android.printservice.recommendation | Print service recommender (Google build) |
+com.android.bookmarkprovider             | Legacy browser bookmark provider no browser uses |
+com.android.dreams.basic                 | "Colors" screensaver |
+com.android.dreams.phototable            | Photo table screensaver |
+com.android.wallpaper.livepicker         | Live wallpaper picker | Live wallpapers stop being selectable
+com.android.wallpaperbackup              | Wallpaper backup agent |
+com.android.sharedstoragebackup          | Shared-storage backup agent |
+com.android.calllogbackup                | Call log backup agent |
+com.android.htmlviewer                   | HTML viewer used for the legal notices screen | Settings > Legal information shows nothing
+com.android.traceur                      | System tracing (developer tool) |
+com.android.smspush                      | WAP push over SMS |
+com.android.stk                          | SIM Toolkit | Carrier SIM menus disappear if you put a SIM in the 4G slot
+com.android.simappdialog                 | "Install carrier app" dialog for SIMs |
+com.android.carrierdefaultapp            | Carrier captive-portal helper |
+com.android.apps.tag                     | NFC tag viewer. No NFC on a head unit |
+com.android.managedprovisioning          | Work-profile / device-owner provisioning | Enterprise enrollment stops working (you have none)
+com.android.quicksearchbox               | AOSP search widget |
+com.android.ondevicepersonalization.services | On-device personalization (Android 13+ ad/personalization plumbing) | Mainline APK; some builds refuse to disable it
+com.android.adservices.api               | AOSP AdServices (Privacy Sandbox ad APIs) | Mainline APK; some builds refuse to disable it

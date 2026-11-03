@@ -1,0 +1,51 @@
+# HARD DENY. sanity.py refuses to touch anything matching these, no flag overrides it.
+# If you think one of these is wrong, edit this file on purpose, not by accident.
+#
+# Format:  regex | why
+# Regexes are Python `re.search` against the package name.
+
+# --- Android core: disable these and the unit stops booting or stops being usable ---
+^android$                                              | The framework itself
+^com\.android\.systemui$                               | Status bar, notifications, recents
+^com\.android\.settings$                               | Settings; also where developer options and the USB role toggle live
+^com\.android\.shell$                                  | The adb shell user. Disable it and adb is gone
+^com\.android\.phone$                                  | Telephony core, persistent; BT hands-free routes through it
+^com\.android\.server\.telecom$                        | Call routing; BT hands-free depends on it
+^com\.android\.providers\.                             | Content providers (settings, media, contacts, downloads, telephony)
+^com\.(google\.)?android\.providers\.media\.module$    | MediaProvider mainline module; storage access dies without it
+^com\.(google\.)?android\.permissioncontroller$        | Runtime permission logic and UI
+^com\.(google\.)?android\.packageinstaller$            | APK installs (you need this to install the FOSS replacements)
+^com\.android\.vpndialogs$                             | VPN consent dialog; NetGuard/PCAPdroid cannot start without it
+^com\.android\.bluetooth$                              | Bluetooth stack
+^com\.(google\.)?android\.networkstack                 | Network stack mainline modules (Wi-Fi/DHCP/captive portal)
+^com\.(google\.)?android\.(wifi|tethering)             | Wi-Fi and hotspot
+^com\.android\.(google\.)?tethering                    | Tethering mainline module
+^com\.(google\.)?android\.ext\.(services|shared)$      | ExtServices/ExtShared mainline modules
+^com\.(google\.)?android\.modulemetadata$              | Mainline module metadata
+^com\.android\.sdksandbox$                             | SDK runtime host
+^com\.android\.location\.fused$                        | Fused location provider; maps stop getting fixes without it
+^com\.android\.externalstorage$                        | USB stick / SD card access provider
+^com\.android\.mtp$                                    | MTP host/device service
+^com\.(google\.)?android\.documentsui$                 | File picker. Joying shipped units WITHOUT it and USB playback broke (XDA)
+^com\.android\.keychain$                               | Certificate store
+^com\.android\.certinstaller$                          | Certificate installer
+^com\.android\.inputdevices$                           | Keyboard layouts
+^com\.android\.localtransport$                         | Local backup transport (adb backup)
+^com\.android\.dynsystem$                              | DSU loader: the zero-risk way to test-drive a GSI (docs/why-not-gsi.md)
+^com\.android\.se$                                     | Secure element service
+^com\.android\.nfc$                                    | NFC stack
+^com\.android\.carrierconfig$                          | Carrier config; telephony misbehaves without it
+^com\.(google\.)?android\.cellbroadcast                | Emergency alert mainline module
+^com\.android\.intentresolver$                         | App chooser / share sheet
+^com\.android\.wallpapercropper$                       | Wallpaper cropper used by Settings
+^com\.android\.webview$                                | AOSP WebView (the current WebView provider is also protected dynamically)
+^com\.google\.android\.webview$                        | Google WebView (same)
+^com\.android\.emergency$                              | Emergency info
+
+# --- FYT / SYU head-unit platform: the MCU leash. Kill these and you get silence,
+#     dead keys, or a unit that never sleeps and flattens the battery. ---
+^com\.syu\.ms$                                         | FYT main MCU bridge: ACC sleep/wake, keys, volume, amp/source switching
+^com\.syu\.air$                                        | FYT nav bar (home/back/volume) and its quick controls
+(^|\.)mcu([._]|$)                                      | Anything that names itself an MCU service, on any platform
+(^|\.)mcuservice                                       | Same, other spelling
+^com\.microntek\.(service|mcu)                         | MTC-platform MCU bridge (in case this list is reused on an MTC unit)

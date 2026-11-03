@@ -1,0 +1,9 @@
+# tier: projection
+# default: off
+# about: Phone projection (CarPlay / Android Auto / mirroring). Not vehicle integration, but proprietary and chatty. Keep one if you use your phone through the screen.
+#
+# package | why | risk
+com.syu.carlink               | FYT "Car Link" CarPlay/AA app (named in Open Headunit's docs) | Wireless CarPlay/AA through the stock app stops
+com.zjinnova.zlink            | ZLink CarPlay/AA receiver | Same
+net.easyconn                  | EasyConnection phone mirroring |
+cn.manstep.phonemirrorBox     | AutoKit (for Carlinkit USB dongles) | Your Carlinkit dongle stops working
