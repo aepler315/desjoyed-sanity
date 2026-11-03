@@ -1,0 +1,7 @@
+# tier: vendor
+# default: off
+# about: Vendor apps that are features, not plumbing, with public evidence of what they are. Optional, test after each.
+#
+# package | why | risk
+com.syu.radio                          | FYT FM/AM radio app (TEF6686 tuner UI) | Switch the audio source away from radio first, then check media audio still plays
+com.mariodantas.fytmanagementcenter    | Mario Dantas "FMC" (community firmware only); auto-launches at boot |

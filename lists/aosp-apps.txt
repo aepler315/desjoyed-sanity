@@ -1,0 +1,16 @@
+# tier: aosp-apps
+# default: off
+# about: Stock AOSP user apps. Harmless, but replace them with FOSS ones (docs/foss-stack.md) and then they are just clutter.
+#
+# package | why | risk
+com.android.gallery3d        | AOSP Gallery | Vendor video/photo apps may hand files to it
+com.android.music            | AOSP Music |
+com.android.soundrecorder    | Sound recorder |
+com.android.calculator2      | Calculator |
+com.android.calendar         | AOSP Calendar |
+com.android.email            | AOSP Email |
+com.android.exchange         | Exchange sync for AOSP Email |
+com.android.browser          | Ancient AOSP browser | Install a real browser first
+com.android.camera2          | AOSP camera | Some reverse-camera wiring opens a camera app; you said you have none
+com.android.deskclock        | AOSP clock/alarms | Any alarm you set is gone
+com.android.mms              | AOSP messaging | SMS on the 4G modem, if you use it
