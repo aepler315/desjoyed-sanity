@@ -1,0 +1,38 @@
+# tier: google
+# default: off
+# about: Full de-Google. Read docs/foss-stack.md FIRST: install your replacement keyboard, TTS, maps and app store before you enable any of these.
+#
+# package | why | risk
+com.google.android.googlequicksearchbox | Google app / Assistant hotword engine (a live mic in your dash) | "Hey Google" and voice search gone
+com.google.android.apps.googleassistant | Assistant shim | Same
+com.google.android.apps.maps            | Google Maps | Use CoMaps / Organic Maps / OsmAnd instead
+com.google.android.youtube              | YouTube | Use NewPipe/Tubular if you must
+com.google.android.apps.youtube.music   | YouTube Music |
+com.google.android.apps.photos          | Google Photos |
+com.google.android.apps.docs            | Google Drive |
+com.google.android.gm                   | Gmail |
+com.google.android.apps.tachyon         | Meet / Duo |
+com.google.android.calendar             | Google Calendar |
+com.google.android.contacts             | Google Contacts | Make sure the vendor BT dialer still shows your phonebook afterwards
+com.google.android.dialer               | Google Phone | Same; BT calls on FYT usually go through the vendor dialer
+com.google.android.apps.messaging       | Google Messages | SMS on the 4G modem, if you use it
+com.google.android.keep                 | Keep |
+com.google.android.videos               | Play Movies |
+com.google.android.music                | Play Music (dead product) |
+com.google.android.play.games           | Play Games |
+com.google.android.apps.books           | Play Books |
+com.google.android.apps.magazines       | Google News |
+com.google.ar.lens                      | Lens |
+com.google.android.apps.nbu.files       | Files by Google | Keep DocumentsUI (protected) or install Material Files first
+com.android.chrome                      | Chrome | Install another browser first; WebView is separate and protected
+com.google.android.projection.gearhead  | Android Auto phone-side app (useless on a head unit) |
+com.google.android.marvin.talkback      | Accessibility suite (TalkBack, Switch Access) |
+com.google.android.tts                  | Google text-to-speech | Navigation voice prompts die unless you install RHVoice or eSpeak NG first
+com.google.android.inputmethod.latin    | Gboard (sends typing stats) | Install HeliBoard/FlorisBoard and switch to it first; the active keyboard is protected anyway
+com.google.android.syncadapters.contacts | Google contacts sync |
+com.google.android.syncadapters.calendar | Google calendar sync |
+com.google.android.backuptransport      | Google backup transport |
+com.google.android.configupdater        | Pushes cert-pin/intent-firewall updates from Google |
+com.android.vending                     | Play Store | Use F-Droid + Obtainium; Aurora Store if you need Play apps
+com.google.android.gsf                  | Google Services Framework | Disable together with gms
+com.google.android.gms                  | Google Play services | EVERY app that needs Play services breaks: push, maps SDK, some media apps. microG is the middle ground

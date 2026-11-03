@@ -1,0 +1,13 @@
+# tier: known-bad
+# default: on
+# about: Packages with PUBLISHED evidence of telemetry or malware on cheap Android hardware. If one is on your unit, triage shouts about it.
+#
+# Evidence is cited per line. Nothing is here on a name match alone.
+# Sources mirrored from github.com/maxhayim/CleanYourHeadUnit data/telemetry.json (MIT), which cites the originals.
+#
+# package | why | risk
+com.adups.fota            | Adups FOTA. Kryptowire 2016: some versions sent SMS bodies, call logs, contacts and IDs to bigdata.adups.com | It is also the OTA updater on units that ship it
+com.adups.fota.sysoper    | Adups FOTA privileged helper (same Kryptowire 2016 report) | Same as above
+com.redstone.ota.ui       | Redstone FOTA. Malwarebytes 2021: a compromised update pipeline pushed a trojan downloader through it | OTA updater
+com.tw.core               | DoFun TWCore. Kaspersky 2026: downloads and installs APKs from a server; installed the JarService malware | OTA updater on DoFun units
+com.tw.jar1               | DoFun "JarService". Kaspersky 2026: multi-stage downloader, ad fraud, residential-proxy botnet | Disabling is not a cleanup. A unit carrying this is compromised: reflash clean firmware

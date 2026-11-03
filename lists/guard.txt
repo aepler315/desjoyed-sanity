@@ -1,0 +1,26 @@
+# GUARDED. Vendor namespaces and names that smell like vehicle, audio, power or
+# update plumbing. triage puts them in the plan commented out with a `force:`
+# prefix; apply refuses them unless that prefix is present. One at a time, reboot,
+# test sound + sleep + keys, then do the next one.
+#
+# Format:  regex | why
+# Entries in the tier lists (aosp.txt, vehicle.txt, ...) take precedence over these.
+# never.txt takes precedence over everything.
+
+^com\.syu\.                                            | FYT/SYU vendor app. Radio, BT, CAN, camera, EQ/DSP and settings live here
+^com\.fyt\.                                            | FYT vendor app
+^com\.lsec\.                                           | LSEC (Lishun / LSECTEK, FYT's parent) vendor app
+^com\.mariodantas\.                                    | Mario Dantas FYT tooling (only on community firmware)
+^com\.microntek\.                                      | MTC-platform vendor app
+^com\.ts\.                                             | TS-platform vendor app
+^com\.tw\.                                             | TW/DoFun platform vendor app (see known-bad.txt for com.tw.jar1)
+^com\.joying\.                                         | Joying-branded app
+^com\.qualcomm\.location$                              | Qualcomm IZat location; GNSS assistance (XTRA). Firewall it instead of disabling
+(^|\.)(canbus|carservice|carsettings?|carinfo|vehicle)([._]|$) | Vehicle plumbing by name
+(^|\.)(steer|steering|swc|avm|dvr|tpms|backcar|reverse|rearview)([._]|$) | Vehicle features by name
+(^|\.)(amp|amplifier|dsp|eq|equalizer|audioservice|soundeffect)([._]|$) | Audio path by name. The TDA7850 is behind this
+(^|\.)(radio|tuner|fm)([._]|$)                         | Tuner app by name (TEF6686 lives behind this)
+(^|\.)(bt|btphone|btservice|handsfree)([._]|$)         | Bluetooth phone/music by name. On FYT, BT audio often runs through a vendor app
+(^|\.)(launcher|launcher\d+)([._]|$)                   | A launcher. Never disable the factory one before another is the default Home
+(^|\.)(ota|fota|update|updater|upgrade|recovery)([._]|$) | Update plumbing. Disable only after you have the firmware file in hand
+(^|\.)(factory|boot|acc|power|sleep|keyservice)([._]|$) | Power/boot/key plumbing by name

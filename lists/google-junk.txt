@@ -1,0 +1,13 @@
+# tier: google-junk
+# default: on
+# about: Google side-cars that report, nag or set up things you will never use. Removing them does NOT break Play services.
+#
+# package | why | risk
+com.google.android.feedback                  | Google feedback / crash report sender | "Send feedback" dialogs stop working
+com.google.android.partnersetup              | Partner setup: OEM search/client IDs |
+com.google.android.onetimeinitializer        | One-time first-boot initializer |
+com.google.android.apps.wellbeing            | Digital Wellbeing usage tracking |
+com.google.android.apps.restore              | "Restore from your old phone" wizard |
+com.google.android.apps.turbo                | Device Health Services (battery/usage predictions) |
+com.google.android.gms.location.history      | Location History client |
+com.google.android.adservices.api            | Google AdServices (Privacy Sandbox ad APIs) | Mainline APK; some builds refuse to disable it

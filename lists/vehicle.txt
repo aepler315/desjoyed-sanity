@@ -1,0 +1,10 @@
+# tier: vehicle
+# default: off
+# about: Vehicle integration you said you do not use. Names below have public evidence on FYT units; everything else vehicle-ish lands in GUARDED for you to judge from the recon.
+#
+# Do them one at a time. After each: reboot, check sound from a media app, the
+# knob/keys, and that the unit actually goes to sleep with ACC off.
+#
+# package | why | risk
+com.syu.canbus     | FYT CAN-bus decoder app (doors, climate overlays, SWC over CAN) | If a CAN protocol is selected in settings, set it to none first
+com.syu.steer      | FYT steering-wheel key learning | Wired SWC learning UI is gone (you have none)
