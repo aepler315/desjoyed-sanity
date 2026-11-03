@@ -7,3 +7,4 @@ com.qualcomm.qti.devicestatisticsservice | QTI device statistics collector |
 com.qualcomm.qti.qdma                    | QTI device management agent | Some vendors use it for OTA
 com.qualcomm.qti.logkit.lite             | QTI on-device log collector |
 com.qualcomm.qti.poweroffalarm           | Phone-style power-off alarm. The MCU owns power here |
+com.qlog                                 | Quectel modem diagnostic logger |

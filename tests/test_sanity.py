@@ -138,6 +138,25 @@ class TestClassification(unittest.TestCase):
             self.assertEqual(r["action"], "never",
                              f"{name} should be 'never' but got {r}")
 
+    def test_qzd_mcu_is_never(self):
+        for name in ["com.car.service", "com.car.service.platform",
+                      "com.car.uiservice"]:
+            r = sanity.classify(name, self.lists)
+            self.assertEqual(r["action"], "never",
+                             f"{name} should be 'never' but got {r}")
+
+    def test_qzd_vendor_tier(self):
+        r = sanity.classify("com.car.radio", self.lists)
+        self.assertEqual(r["tier"], "vendor")
+
+    def test_qzd_vehicle_tier(self):
+        r = sanity.classify("com.car.canbus", self.lists)
+        self.assertEqual(r["tier"], "vehicle")
+
+    def test_unknown_qzd_is_guard(self):
+        r = sanity.classify("com.car.somethingelse", self.lists)
+        self.assertEqual(r["action"], "guard")
+
 
 class TestAdbWrapper(unittest.TestCase):
 

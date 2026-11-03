@@ -49,3 +49,6 @@
 (^|\.)mcu([._]|$)                                      | Anything that names itself an MCU service, on any platform
 (^|\.)mcuservice                                       | Same, other spelling
 ^com\.microntek\.(service|mcu)                         | MTC-platform MCU bridge (in case this list is reused on an MTC unit)
+^com\.car\.service$                                    | QZD MCU bridge: ACC sleep/wake, keys, volume, amp/source switching
+^com\.car\.service\.platform$                          | QZD platform service layer
+^com\.car\.uiservice$                                  | QZD nav bar and system UI overlay

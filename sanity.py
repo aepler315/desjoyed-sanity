@@ -204,7 +204,7 @@ def parse_regex_list(path: Path) -> list[tuple[re.Pattern, str]]:
             line = line.rstrip("\n")
             if line.startswith("#") or not line.strip():
                 continue
-            m = re.match(r"^(.+?)\s{2,}\|\s*(.*)$", line)
+            m = re.match(r"^(.+)\s+\|\s+(.*)$", line)
             if m:
                 pattern = m.group(1).strip()
                 why = m.group(2).strip()
