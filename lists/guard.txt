@@ -15,6 +15,7 @@
 ^com\.ts\.                                             | TS-platform vendor app
 ^com\.tw\.                                             | TW/DoFun platform vendor app (see known-bad.txt for com.tw.jar1)
 ^com\.joying\.                                         | Joying-branded app
+^com\.car\.                                            | QZD vendor app. BT, radio, EQ, media and settings live here
 ^com\.qualcomm\.location$                              | Qualcomm IZat location; GNSS assistance (XTRA). Firewall it instead of disabling
 (^|\.)(canbus|carservice|carsettings?|carinfo|vehicle)([._]|$) | Vehicle plumbing by name
 (^|\.)(steer|steering|swc|avm|dvr|tpms|backcar|reverse|rearview)([._]|$) | Vehicle features by name

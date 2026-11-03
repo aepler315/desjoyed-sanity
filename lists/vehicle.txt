@@ -8,3 +8,5 @@
 # package | why | risk
 com.syu.canbus     | FYT CAN-bus decoder app (doors, climate overlays, SWC over CAN) | If a CAN protocol is selected in settings, set it to none first
 com.syu.steer      | FYT steering-wheel key learning | Wired SWC learning UI is gone (you have none)
+com.car.canbus     | QZD CAN-bus decoder app (doors, climate overlays, SWC over CAN) | If a CAN protocol is selected in settings, set it to none first
+com.car.steer      | QZD steering-wheel key learning | Wired SWC learning UI is gone (you have none)

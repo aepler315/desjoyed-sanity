@@ -5,3 +5,16 @@
 # package | why | risk
 com.syu.radio                          | FYT FM/AM radio app (TEF6686 tuner UI) | Switch the audio source away from radio first, then check media audio still plays
 com.mariodantas.fytmanagementcenter    | Mario Dantas "FMC" (community firmware only); auto-launches at boot |
+com.car.radio                          | QZD FM/AM radio app (TEF6686 tuner UI) | Switch the audio source away from radio first, then check media audio still plays
+com.car.onlinemarket                   | QZD app store / market |
+com.car.bootguide                      | QZD first-boot setup wizard |
+com.car.instructions                   | QZD built-in help / user manual |
+com.car.screensaver                    | QZD screensaver |
+com.car.photo                          | QZD photo viewer |
+com.car.video                          | QZD video player |
+com.car.record                         | QZD sound recorder |
+com.car.wallpaper                      | QZD wallpaper picker |
+com.car.hdmi                           | QZD HDMI input app |
+com.car.qzd.screenlock                 | QZD screen lock / PIN |
+com.car.qzd.themeset                   | QZD theme engine |
+com.netflix.mediaclient                | Netflix (pre-loaded, not sideloaded) |
