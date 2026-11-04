@@ -2,13 +2,10 @@
 """
 fwtool.py: inspect and modify FYT-lineage firmware ZIPs (update_car.zip).
 
-Read-only by default. The 'strip' subcommand creates a new zip with
-selected entries removed. No re-signing: the stock updater trusts the
-AOSP testkey, and we leave the existing signature intact by rewriting
-only the entries before the signing data.
-
-This does NOT flash anything. It creates a modified zip you then flash
-through the normal USB update path.
+Read-only by default. The 'strip' subcommand creates a new unsigned zip
+with selected entries removed and refuses existing output paths.
+Signature detection is structural only: no cryptographic verification or
+device/updater compatibility is established. This tool does not flash.
 """
 
 import argparse
@@ -26,24 +23,15 @@ from typing import Optional
 # Zip signature handling (Android whole-file v1 signature)
 #
 # The signing format:
-#   [zip content ... EOCD] [PKCS#7 DER] [2-byte p7 len] [4-byte EOCD offset]
-#   EOCD comment = "signed by SignApk\0" + p7 + footer
-#   Comment length field in EOCD = len(comment)
-#
-# We detect the signature by looking for the EOCD, checking if the
-# comment starts with "signed by SignApk", and extracting the PKCS#7
-# block.
+#   EOCD comment = message + PKCS#7 DER + 6-byte footer
+#   footer = uint16 signature_start_from_EOF, 0xff 0xff, uint16 comment_size
+# Source: AOSP build/tools/signapk/src/com/android/signapk/SignApk.java,
+# signWholeFile. This only recognizes a container; it cannot authenticate it.
 # ---------------------------------------------------------------------------
 
 SIGNEDBY = b"signed by SignApk\x00"
 EOCD_MAGIC = b"\x50\x4b\x05\x06"
 EOCD_MIN_SIZE = 22
-
-# AOSP testkey SHA-256 fingerprint (DER of the X.509 cert)
-AOSP_TESTKEY_SHA256 = (
-    "a40da80a59d170caa950cf15c18c454d47a39b26989d8b640ecd745ba71bf5dc"
-)
-
 
 def find_eocd(data: bytes) -> Optional[int]:
     """Find the End of Central Directory record, scanning backwards."""
@@ -60,33 +48,28 @@ def find_eocd(data: bytes) -> Optional[int]:
 
 
 def parse_signature(data: bytes) -> dict:
-    """Parse Android whole-file v1 signature from a zip."""
-    info = {"signed": False, "signer": "", "cert_sha256": ""}
+    """Detect an Android whole-file signature container, without verifying it.
+
+    The legacy 'signed' key describes presence only. 'verified' is always false.
+    No signer identity or certificate fingerprint is inferred from a ZIP comment.
+    """
+    info = {"signed": False, "verified": False, "signer": "", "cert_sha256": ""}
 
     eocd_pos = find_eocd(data)
     if eocd_pos is None:
         return info
 
     comment_len = struct.unpack_from("<H", data, eocd_pos + 20)[0]
-    if comment_len == 0:
+    if comment_len < 7:
         return info
 
     comment = data[eocd_pos + EOCD_MIN_SIZE:]
-    if not comment.startswith(SIGNEDBY):
+    signature_start, marker, footer_comment_len = struct.unpack("<H2sH", comment[-6:])
+    if marker != b"\xff\xff" or footer_comment_len != comment_len:
         return info
-
-    info["signed"] = True
-    info["signer"] = "SignApk"
-
-    footer = comment[-6:]
-    p7_len = struct.unpack_from("<H", footer, 0)[0]
-
-    p7_start = len(SIGNEDBY)
-    p7_end = p7_start + p7_len
-    if p7_end <= len(comment):
-        p7_der = comment[p7_start:p7_end]
-        info["p7_size"] = len(p7_der)
-
+    if not 6 < signature_start <= comment_len or EOCD_MAGIC in comment:
+        return info
+    info.update(signed=True, p7_size=signature_start - 6)
     return info
 
 
@@ -135,7 +118,7 @@ def cmd_inspect(args):
 
     sig = parse_signature(data)
     if sig["signed"]:
-        print(f"  [OK] Signed by: {sig['signer']}")
+        print("  Signature container detected; signature and signer not verified")
         if sig.get("p7_size"):
             print(f"       PKCS#7 block: {sig['p7_size']} bytes")
     else:
@@ -216,6 +199,13 @@ def cmd_strip(args):
         print(f"[!!] File not found: {zip_path}")
         sys.exit(1)
 
+    if os.path.lexists(out_path):
+        if os.path.exists(out_path) and os.path.samefile(zip_path, out_path):
+            print("[!!] Output refers to the input file; refusing to overwrite it")
+        else:
+            print(f"[!!] Output already exists; refusing to overwrite: {out_path}")
+        sys.exit(1)
+
     compiled = [re.compile(p) for p in patterns]
 
     print(f"=== STRIP: {zip_path} -> {out_path} ===")
@@ -242,11 +232,16 @@ def cmd_strip(args):
         print(f"  Keeping {len(kept)} entries")
         print()
 
-        with zipfile.ZipFile(out_path, "w") as zout:
-            for name in kept:
-                info = zin.getinfo(name)
-                data = zin.read(name)
-                zout.writestr(info, data)
+        try:
+            # Exclusive creation also closes the race after the earlier check.
+            with zipfile.ZipFile(out_path, "x") as zout:
+                for name in kept:
+                    info = zin.getinfo(name)
+                    data = zin.read(name)
+                    zout.writestr(info, data)
+        except FileExistsError:
+            print(f"[!!] Output already exists; refusing to overwrite: {out_path}")
+            sys.exit(1)
 
     out_size = os.path.getsize(out_path)
     out_sha256 = hashlib.sha256(Path(out_path).read_bytes()).hexdigest()
@@ -254,13 +249,12 @@ def cmd_strip(args):
     print(f"  Size:    {out_size:,} bytes")
     print(f"  SHA-256: {out_sha256}")
     print()
-    print("  [!!] The output zip is NOT signed. If the updater checks")
-    print("       the signature, you will need to re-sign it with the")
-    print("       AOSP testkey (see docs/firmware.md).")
+    print("  [!!] The output zip has no valid whole-file signature.")
+    print("       Updater acceptance and device compatibility are not verified.")
 
 
 def cmd_sigcheck(args):
-    """Check whether a zip's signature uses the AOSP testkey."""
+    """Detect the signature container; this is not a cryptographic verifier."""
     zip_path = args.zip
     if not os.path.isfile(zip_path):
         print(f"[!!] File not found: {zip_path}")
@@ -276,16 +270,11 @@ def cmd_sigcheck(args):
         print("  [!!] No Android v1 whole-file signature found")
         sys.exit(1)
 
-    print(f"  Signed by:   {sig['signer']}")
+    print("  Signature container detected; signature and signer not verified")
     if sig.get("p7_size"):
         print(f"  PKCS#7 size: {sig['p7_size']} bytes")
     print()
-    print("  To extract and verify the certificate, use:")
-    print(f"    openssl cms -verify -in <p7.der> -inform DER \\")
-    print(f"      -noverify -content <signed-region>")
-    print()
-    print(f"  Known AOSP testkey SHA-256:")
-    print(f"    {AOSP_TESTKEY_SHA256}")
+    print("  No certificate trust, AOSP testkey match, or updater acceptance established.")
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +310,7 @@ def main():
                          help="Regex patterns for entries to remove")
 
     p_sig = sub.add_parser("sigcheck",
-                           help="Check the zip signature")
+                           help="Detect signature structure (no cryptographic verification)")
     p_sig.add_argument("zip", help="Path to zip")
 
     args = parser.parse_args()

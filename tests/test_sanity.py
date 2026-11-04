@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +30,27 @@ class FakeAdb(sanity.Adb):
     def __init__(self):
         super().__init__(binary=sys.executable, serial=None)
         self._base = [sys.executable, FAKE_ADB]
+
+
+class RecordingAdb(FakeAdb):
+    """Record the real wrapper's commands while isolating the physical device."""
+
+    def __init__(self):
+        super().__init__()
+        self.commands = []
+        self.failures = set()
+
+    def shell(self, cmd, **kwargs):
+        self.commands.append(cmd)
+        if cmd in self.failures:
+            raise sanity.AdbError("simulated package manager failure")
+        return super().shell(cmd, **kwargs)
+
+    @property
+    def mutations(self):
+        return [cmd for cmd in self.commands if cmd.startswith((
+            "pm disable-user ", "pm uninstall ", "pm enable ",
+            "pm install-existing "))]
 
 
 class TestListParsing(unittest.TestCase):
@@ -66,6 +88,16 @@ class TestListParsing(unittest.TestCase):
         self.assertIn("known-bad", lists["tiers"])
         self.assertIn("aosp", lists["tiers"])
         self.assertIn("google", lists["tiers"])
+
+    def test_regex_reason_accepts_one_space_without_breaking_alternation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "guard.txt"
+            path.write_text(r"(^|\.)(audio|dsp)([._]|$) | Audio path" + "\n")
+            entries = sanity.parse_regex_list(path)
+        pattern, reason = entries[0]
+        self.assertIsNotNone(pattern.search("org.example.dsp"))
+        self.assertIsNone(pattern.search("org.example.safe"))
+        self.assertEqual(reason, "Audio path")
 
 
 class TestClassification(unittest.TestCase):
@@ -140,6 +172,12 @@ class TestClassification(unittest.TestCase):
 
 
 class TestAdbWrapper(unittest.TestCase):
+
+    def test_android_utf8_properties_ignore_host_locale(self):
+        adb = sanity.Adb(binary=sys.executable)
+        adb._base += ["-c", "import sys; sys.stdout.buffer.write("
+                      "b'[ro.product.model]: [\\xe5\\x8d\\x95]\\n')"]
+        self.assertEqual(adb.getprop()["ro.product.model"], "\u5355")
 
     def setUp(self):
         self.adb = FakeAdb()
@@ -228,7 +266,8 @@ class TestApply(unittest.TestCase):
             })()
             with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
                 sanity.cmd_apply(adb, lists, args)
-            journal = sanity.journal_read(adb.device_id())
+                journal = sanity.journal_read(adb.device_id())
+            self.assertIn("com.android.egg", [e.get("package") for e in journal])
             actions = [e["action"] for e in journal
                        if e.get("package") == "com.android.systemui"]
             self.assertTrue(len(actions) == 0)
@@ -255,7 +294,7 @@ class TestApply(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             plan_path = os.path.join(tmpdir, "plan.txt")
             Path(plan_path).write_text(
-                "# force: com.syu.somethingelse  # test\n")
+                "force: com.syu.somethingelse  # test\n")
             args = type("Args", (), {
                 "plan": plan_path, "uninstall": False
             })()
@@ -266,8 +305,207 @@ class TestApply(unittest.TestCase):
                     if e.get("action") == "disable-user"]
             self.assertIn("com.syu.somethingelse", pkgs)
 
+    def test_comments_never_apply_even_with_force_prefix(self):
+        adb = RecordingAdb()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = Path(tmpdir) / "plan.txt"
+            plan.write_text("com.android.egg\n# force: com.syu.somethingelse\n"
+                            "  # force: com.syu.another\n# com.adups.fota\n")
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                 SimpleNamespace(plan=str(plan), uninstall=False))
+        self.assertEqual(adb.mutations,
+                         ["pm disable-user --user 0 com.android.egg"])
+
+    def test_guarded_package_requires_explicit_force(self):
+        adb = RecordingAdb()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = Path(tmpdir) / "plan.txt"
+            plan.write_text("com.syu.somethingelse\norg.example.dsp\n")
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                 SimpleNamespace(plan=str(plan), uninstall=False))
+        self.assertEqual(adb.mutations, [])
+
+    def test_force_never_overrides_hard_deny(self):
+        adb = RecordingAdb()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = Path(tmpdir) / "plan.txt"
+            plan.write_text("force: com.android.systemui\nforce: com.syu.ms\n")
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                 SimpleNamespace(plan=str(plan), uninstall=False))
+                self.assertEqual(sanity.journal_read(adb.device_id()), [])
+        self.assertEqual(adb.mutations, [])
+
+    def test_invalid_plan_aborts_before_any_mutation(self):
+        for invalid in ("com.example.app; reboot", "com.example.app && reboot",
+                        "com.example.$(reboot)", "--user 10", "com..example",
+                        "com.example app", "force:", "force: com.example/app"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmpdir:
+                adb = RecordingAdb()
+                plan = Path(tmpdir) / "plan.txt"
+                plan.write_text(f"com.android.egg\n{invalid}\n")
+                with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                    with self.assertRaises(SystemExit) as caught:
+                        sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                         SimpleNamespace(plan=str(plan), uninstall=False))
+                    self.assertNotEqual(caught.exception.code, 0)
+                self.assertEqual(adb.mutations, [])
+
+    def test_missing_explicit_plan_does_not_apply_default(self):
+        adb = RecordingAdb()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                default = sanity.state_dir_for(adb.device_id()) / "plan.txt"
+                default.write_text("com.android.egg\n")
+                with self.assertRaises(SystemExit) as caught:
+                    sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                     SimpleNamespace(plan=str(Path(tmpdir) / "missing.txt"),
+                                                     uninstall=False))
+                self.assertNotEqual(caught.exception.code, 0)
+        self.assertEqual(adb.mutations, [])
+
+    def test_failed_apply_returns_nonzero(self):
+        adb = RecordingAdb()
+        adb.failures.add("pm disable-user --user 0 com.android.egg")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plan = Path(tmpdir) / "plan.txt"
+            plan.write_text("com.android.egg\n")
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                with self.assertRaises(SystemExit) as caught:
+                    sanity.cmd_apply(adb, sanity.load_all_lists(LISTS_DIR),
+                                     SimpleNamespace(plan=str(plan), uninstall=False))
+                self.assertNotEqual(caught.exception.code, 0)
+                self.assertFalse(any(e["action"] == "disable-user"
+                                     for e in sanity.journal_read(adb.device_id())))
+
 
 class TestRestore(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state_patch = patch.object(sanity, "STATE_DIR", Path(self.tmp.name))
+        self.state_patch.start()
+        self.addCleanup(self.state_patch.stop)
+        self.adb = RecordingAdb()
+        self.dev_id = self.adb.device_id()
+        self.lists = sanity.load_all_lists(LISTS_DIR)
+
+    def append(self, action, package="com.android.egg", **extra):
+        sanity.journal_append(self.dev_id, {"action": action, "package": package,
+                                           **extra})
+
+    def restore(self, **kwargs):
+        args = {"package": None, "last": None, "all": False}
+        args.update(kwargs)
+        sanity.cmd_restore(self.adb, self.lists, SimpleNamespace(**args))
+
+    def test_restore_uses_inverse_of_recorded_action(self):
+        self.append("disable-user")
+        self.append("uninstall-user", "com.adups.fota")
+        self.restore(all=True)
+        self.assertCountEqual(self.adb.mutations, [
+            "pm enable com.android.egg",
+            "pm install-existing --user 0 com.adups.fota",
+        ])
+
+    def test_repeated_last_restores_next_pending_package(self):
+        self.append("disable-user", "com.adups.fota")
+        self.append("disable-user")
+        self.restore(last=1)
+        self.restore(last=1)
+        self.assertEqual(self.adb.mutations, [
+            "pm enable com.android.egg", "pm enable com.adups.fota",
+        ])
+
+    def test_failed_restore_stays_pending_and_retry_succeeds(self):
+        self.append("disable-user")
+        self.adb.failures.add("pm enable com.android.egg")
+        with self.assertRaises(SystemExit) as caught:
+            self.restore(all=True)
+        self.assertNotEqual(caught.exception.code, 0)
+        self.assertFalse(any(e["action"] == "restore"
+                             for e in sanity.journal_read(self.dev_id)))
+        self.adb.failures.clear()
+        self.restore(all=True)
+        self.assertEqual(self.adb.mutations, [
+            "pm enable com.android.egg", "pm enable com.android.egg",
+        ])
+        self.assertEqual(len([e for e in sanity.journal_read(self.dev_id)
+                              if e["action"] == "restore"]), 1)
+
+    def test_later_disable_after_restore_is_pending_again(self):
+        self.append("disable-user")
+        self.append("restore")
+        self.append("disable-user")
+        self.restore(last=1)
+        self.assertEqual(self.adb.mutations, ["pm enable com.android.egg"])
+
+    def test_disable_then_uninstall_restores_both_in_reverse_order(self):
+        self.append("disable-user")
+        self.append("uninstall-user")
+        self.restore(last=1)
+        self.assertEqual(self.adb.mutations, [
+            "pm install-existing --user 0 com.android.egg",
+            "pm enable com.android.egg",
+        ])
+        self.adb.commands.clear()
+        with self.assertRaises(SystemExit):
+            self.restore(all=True)
+        self.assertEqual(self.adb.mutations, [])
+
+    def test_partial_restore_keeps_failed_inverse_pending(self):
+        self.append("disable-user")
+        self.append("uninstall-user")
+        self.adb.failures.add("pm enable com.android.egg")
+        with self.assertRaises(SystemExit) as caught:
+            self.restore(all=True)
+        self.assertNotEqual(caught.exception.code, 0)
+        self.adb.failures.clear()
+        self.adb.commands.clear()
+        self.restore(all=True)
+        self.assertEqual(self.adb.mutations, ["pm enable com.android.egg"])
+
+    def test_failed_reinstall_does_not_attempt_earlier_enable(self):
+        self.append("disable-user")
+        self.append("uninstall-user")
+        self.adb.failures.add("pm install-existing --user 0 com.android.egg")
+        with self.assertRaises(SystemExit):
+            self.restore(all=True)
+        self.assertEqual(self.adb.mutations,
+                         ["pm install-existing --user 0 com.android.egg"])
+
+    def test_restore_does_not_guess_method_without_pending_action(self):
+        with self.assertRaises(SystemExit) as caught:
+            self.restore(package="com.android.egg")
+        self.assertNotEqual(caught.exception.code, 0)
+        self.assertEqual(self.adb.mutations, [])
+
+    def test_invalid_journal_package_aborts_before_any_mutation(self):
+        self.append("disable-user", "com.adups.fota")
+        self.append("disable-user", "com.example.app; reboot")
+        with self.assertRaises(SystemExit) as caught:
+            self.restore(all=True)
+        self.assertNotEqual(caught.exception.code, 0)
+        self.assertEqual(self.adb.mutations, [])
+
+    def test_last_count_must_be_positive(self):
+        self.append("disable-user")
+        for count in (0, -1):
+            with self.subTest(count=count):
+                with self.assertRaises(SystemExit) as caught:
+                    self.restore(last=count)
+                self.assertNotEqual(caught.exception.code, 0)
+        self.assertEqual(self.adb.mutations, [])
+
+    def test_restore_options_are_mutually_exclusive(self):
+        self.append("disable-user")
+        with self.assertRaises(SystemExit) as caught:
+            self.restore(last=1, all=True)
+        self.assertNotEqual(caught.exception.code, 0)
+        self.assertEqual(self.adb.mutations, [])
 
     def test_restore_last(self):
         adb = FakeAdb()
