@@ -1,235 +1,188 @@
 #!/usr/bin/env python3
-"""Tests for fwtool.py: firmware zip inspection and modification."""
-import hashlib
+"""Tests for firmware inspection, signature detection, and safe ZIP rewriting."""
+import contextlib
 import io
 import os
 import struct
-import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+from types import SimpleNamespace
 
 import fwtool
 
 
-def make_test_zip(entries: dict[str, bytes],
-                  updater_script: bytes | None = None) -> bytes:
-    """Create a zip in memory with the given entries."""
+def make_test_zip(entries: dict[str, bytes], updater_script=None) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
         if updater_script is not None:
-            zf.writestr(
-                "META-INF/com/google/android/updater-script",
-                updater_script)
+            zf.writestr("META-INF/com/google/android/updater-script", updater_script)
         for name, data in entries.items():
             zf.writestr(name, data)
     return buf.getvalue()
 
 
 def sign_zip_fake(data: bytes) -> bytes:
-    """Append a fake Android v1 whole-file signature to a zip.
-
-    This creates a structurally valid signature block (the format the
-    parser looks for) but with a dummy PKCS#7 blob.
-    """
-    eocd_pos = fwtool.find_eocd(data)
-    assert eocd_pos is not None
-
+    """AOSP footer layout with fake signature bytes; deliberately NOT verified."""
+    eocd_pos = data.rfind(b"PK\x05\x06")
     fake_p7 = b"\x30\x00" * 20
-
-    comment = fwtool.SIGNEDBY + fake_p7
-    footer = struct.pack("<H", len(fake_p7))
-    footer += struct.pack("<I", eocd_pos)
-    comment += footer
-    comment_len = len(comment)
-
+    comment = b"signed by SignApk\x00" + fake_p7
+    # Signature start is its distance from EOF, including the six-byte footer.
+    comment += struct.pack("<H2sH", 46, b"\xff\xff", len(comment) + 6)
     new_data = bytearray(data)
-    old_comment_len_pos = eocd_pos + 20
-    struct.pack_into("<H", new_data, old_comment_len_pos, comment_len)
-    new_data += comment
-
-    return bytes(new_data)
+    struct.pack_into("<H", new_data, eocd_pos + 20, len(comment))
+    return bytes(new_data) + comment
 
 
-UPDATER_SCRIPT = b"""\
-assert(getprop("ro.product.device") == "msmnile" ||
-       getprop("ro.build.product") == "msmnile");
+UPDATER_SCRIPT = b'''assert(getprop("ro.product.device") == "msmnile");
 assert(less_than_int("1700000000", getprop("ro.build.date.utc")));
-show_progress(0.100000, 0);
-"""
+'''
+
+
+class TempCase(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def write_zip(self, data, name="input.zip"):
+        path = self.folder / name
+        path.write_bytes(data)
+        return path
+
+    def command(self, fn, **kwargs):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            fn(SimpleNamespace(**kwargs))
+        return output.getvalue()
 
 
 class TestFindEocd(unittest.TestCase):
-
     def test_finds_eocd_in_valid_zip(self):
         data = make_test_zip({"test.txt": b"hello"})
-        pos = fwtool.find_eocd(data)
-        self.assertIsNotNone(pos)
-        self.assertEqual(data[pos:pos + 4], fwtool.EOCD_MAGIC)
+        self.assertEqual(data[fwtool.find_eocd(data):][:4], b"PK\x05\x06")
 
     def test_none_for_garbage(self):
-        pos = fwtool.find_eocd(b"not a zip at all")
-        self.assertIsNone(pos)
+        self.assertIsNone(fwtool.find_eocd(b"not a zip at all"))
 
 
 class TestParseSignature(unittest.TestCase):
-
     def test_unsigned(self):
-        data = make_test_zip({"test.txt": b"hello"})
-        sig = fwtool.parse_signature(data)
-        self.assertFalse(sig["signed"])
+        self.assertFalse(fwtool.parse_signature(make_test_zip({}))["signed"])
 
-    def test_signed(self):
-        data = make_test_zip({"test.txt": b"hello"})
-        signed = sign_zip_fake(data)
-        sig = fwtool.parse_signature(signed)
+    def test_signed_structure_never_means_verified(self):
+        sig = fwtool.parse_signature(sign_zip_fake(make_test_zip({})))
         self.assertTrue(sig["signed"])
-        self.assertEqual(sig["signer"], "SignApk")
         self.assertEqual(sig["p7_size"], 40)
+        self.assertFalse(sig["verified"])
+        self.assertEqual(sig["cert_sha256"], "")
+
+    def test_footer_magic_length_and_offset_required(self):
+        original = sign_zip_fake(make_test_zip({}))
+        for offset, replacement in ((-4, b"\x00\x00"), (-2, b"\x01\x00"),
+                                    (-6, b"\xff\xff"), (-6, b"\x06\x00")):
+            data = bytearray(original)
+            data[len(data) + offset:len(data) + offset + 2] = replacement
+            with self.subTest(offset=offset, replacement=replacement):
+                self.assertFalse(fwtool.parse_signature(data)["signed"])
+
+    def test_comment_marker_alone_is_not_a_signature(self):
+        buf = io.BytesIO(make_test_zip({}))
+        with zipfile.ZipFile(buf, "a") as zf:
+            zf.comment = b"signed by SignApk\x00"
+        self.assertFalse(fwtool.parse_signature(buf.getvalue())["signed"])
 
 
-class TestCheckMetadata(unittest.TestCase):
-
+class TestCheckMetadata(TempCase):
     def test_with_updater_script(self):
-        data = make_test_zip({}, updater_script=UPDATER_SCRIPT)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(data)
-            f.flush()
-            zf = zipfile.ZipFile(f.name)
+        path = self.write_zip(make_test_zip({}, UPDATER_SCRIPT))
+        with zipfile.ZipFile(path) as zf:
             meta = fwtool.check_metadata(zf)
-            zf.close()
-            os.unlink(f.name)
         self.assertTrue(meta["has_updater_script"])
         self.assertEqual(meta["post_timestamp"], 1700000000)
         self.assertEqual(meta["pre_device"], "msmnile")
 
     def test_without_updater_script(self):
-        data = make_test_zip({"boot.img": b"\x00" * 100})
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(data)
-            f.flush()
-            zf = zipfile.ZipFile(f.name)
-            meta = fwtool.check_metadata(zf)
-            zf.close()
-            os.unlink(f.name)
-        self.assertFalse(meta["has_updater_script"])
+        path = self.write_zip(make_test_zip({"boot.img": bytes(100)}))
+        with zipfile.ZipFile(path) as zf:
+            self.assertFalse(fwtool.check_metadata(zf)["has_updater_script"])
 
 
-class TestInspect(unittest.TestCase):
-
+class TestInspect(TempCase):
     def test_inspect_basic(self):
-        entries = {
-            "owner_apk/Bloat.apk": b"PK\x03\x04fake",
-            "config_file/policy.db": b"sqlite3",
-            "boot.img": b"ANDROID!" + b"\x00" * 100,
-        }
-        data = make_test_zip(entries, updater_script=UPDATER_SCRIPT)
-        signed = sign_zip_fake(data)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(signed)
-            f.flush()
-            args = type("Args", (), {
-                "zip": f.name, "list_all": False
-            })()
-            fwtool.cmd_inspect(args)
-            os.unlink(f.name)
+        data = make_test_zip({"owner_apk/Bloat.apk": b"fake",
+                              "config_file/policy.db": b"sqlite3",
+                              "boot.img": b"ANDROID!"}, UPDATER_SCRIPT)
+        path = self.write_zip(sign_zip_fake(data))
+        output = self.command(fwtool.cmd_inspect, zip=path, list_all=False)
+        self.assertIn("owner_apk/Bloat.apk", output)
+        self.assertIn("not verified", output.lower())
+        self.assertNotIn("[OK] Signed by", output)
 
     def test_inspect_list_all(self):
-        data = make_test_zip({"a.txt": b"a", "b.txt": b"b"})
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(data)
-            f.flush()
-            args = type("Args", (), {
-                "zip": f.name, "list_all": True
-            })()
-            fwtool.cmd_inspect(args)
-            os.unlink(f.name)
+        path = self.write_zip(make_test_zip({"a.txt": b"a", "b.txt": b"b"}))
+        output = self.command(fwtool.cmd_inspect, zip=path, list_all=True)
+        self.assertIn("a.txt", output)
+        self.assertIn("b.txt", output)
 
 
-class TestStrip(unittest.TestCase):
-
-    def test_strip_removes_entries(self):
-        entries = {
-            "owner_apk/Bloat.apk": b"bloat",
-            "owner_apk/Good.apk": b"good",
-            "boot.img": b"ANDROID!",
-        }
-        data = make_test_zip(entries)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as fin:
-            fin.write(data)
-            fin.flush()
-            with tempfile.NamedTemporaryFile(
-                    suffix=".zip", delete=False) as fout:
-                args = type("Args", (), {
-                    "zip": fin.name,
-                    "output": fout.name,
-                    "remove": [r"owner_apk/Bloat"],
-                })()
-                fwtool.cmd_strip(args)
-                zf = zipfile.ZipFile(fout.name)
-                names = zf.namelist()
-                zf.close()
-                os.unlink(fout.name)
-            os.unlink(fin.name)
-
-        self.assertNotIn("owner_apk/Bloat.apk", names)
-        self.assertIn("owner_apk/Good.apk", names)
-        self.assertIn("boot.img", names)
+class TestStrip(TempCase):
+    def test_strip_removes_entries_preserves_source(self):
+        data = make_test_zip({"owner_apk/Bloat.apk": b"bloat",
+                              "owner_apk/Good.apk": b"good", "boot.img": b"ANDROID!"})
+        source = self.write_zip(data)
+        output = self.folder / "output.zip"
+        self.command(fwtool.cmd_strip, zip=source, output=output,
+                     remove=[r"owner_apk/Bloat"])
+        self.assertEqual(source.read_bytes(), data)
+        with zipfile.ZipFile(output) as zf:
+            self.assertEqual(set(zf.namelist()), {"owner_apk/Good.apk", "boot.img"})
+            self.assertEqual(zf.read("boot.img"), b"ANDROID!")
 
     def test_strip_all_owner_apk(self):
-        entries = {
-            "owner_apk/A.apk": b"a",
-            "owner_apk/B.apk": b"b",
-            "system.img": b"sys",
-        }
-        data = make_test_zip(entries)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as fin:
-            fin.write(data)
-            fin.flush()
-            with tempfile.NamedTemporaryFile(
-                    suffix=".zip", delete=False) as fout:
-                args = type("Args", (), {
-                    "zip": fin.name,
-                    "output": fout.name,
-                    "remove": [r"owner_apk/.*"],
-                })()
-                fwtool.cmd_strip(args)
-                zf = zipfile.ZipFile(fout.name)
-                names = zf.namelist()
-                zf.close()
-                os.unlink(fout.name)
-            os.unlink(fin.name)
+        source = self.write_zip(make_test_zip({"owner_apk/A.apk": b"a",
+                                               "owner_apk/B.apk": b"b", "system.img": b"sys"}))
+        output = self.folder / "output.zip"
+        self.command(fwtool.cmd_strip, zip=source, output=output, remove=[r"owner_apk/.*"])
+        with zipfile.ZipFile(output) as zf:
+            self.assertEqual(zf.namelist(), ["system.img"])
 
-        owner_apks = [n for n in names if n.startswith("owner_apk/")]
-        self.assertEqual(len(owner_apks), 0)
-        self.assertIn("system.img", names)
+    def assert_refused_preserves_source(self, source, output):
+        before = source.read_bytes()
+        with self.assertRaises(SystemExit) as error:
+            self.command(fwtool.cmd_strip, zip=source, output=output, remove=["bloat"])
+        self.assertNotEqual(error.exception.code, 0)
+        self.assertEqual(source.read_bytes(), before)
+
+    def test_same_file_refused_without_truncation(self):
+        source = self.write_zip(make_test_zip({"bloat": b"x", "boot.img": b"kernel"}))
+        self.assert_refused_preserves_source(source, source)
+
+    def test_hardlink_alias_refused_without_truncation(self):
+        source = self.write_zip(make_test_zip({"bloat": b"x", "boot.img": b"kernel"}))
+        alias = self.folder / "alias.zip"
+        os.link(source, alias)
+        self.assert_refused_preserves_source(source, alias)
+
+    def test_existing_output_refused_and_preserved(self):
+        source = self.write_zip(make_test_zip({"bloat": b"x", "boot.img": b"kernel"}))
+        output = self.write_zip(b"irreplaceable", "output.zip")
+        self.assert_refused_preserves_source(source, output)
+        self.assertEqual(output.read_bytes(), b"irreplaceable")
 
 
-class TestSigcheck(unittest.TestCase):
-
+class TestSigcheck(TempCase):
     def test_sigcheck_unsigned(self):
-        data = make_test_zip({"test.txt": b"hello"})
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(data)
-            f.flush()
-            args = type("Args", (), {"zip": f.name})()
-            with self.assertRaises(SystemExit):
-                fwtool.cmd_sigcheck(args)
-            os.unlink(f.name)
+        path = self.write_zip(make_test_zip({}))
+        with self.assertRaises(SystemExit):
+            self.command(fwtool.cmd_sigcheck, zip=path)
 
-    def test_sigcheck_signed(self):
-        data = make_test_zip({"test.txt": b"hello"})
-        signed = sign_zip_fake(data)
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as f:
-            f.write(signed)
-            f.flush()
-            args = type("Args", (), {"zip": f.name})()
-            fwtool.cmd_sigcheck(args)
-            os.unlink(f.name)
+    def test_sigcheck_detected_signature_reports_unverified(self):
+        path = self.write_zip(sign_zip_fake(make_test_zip({})))
+        output = self.command(fwtool.cmd_sigcheck, zip=path)
+        self.assertIn("not verified", output.lower())
+        self.assertNotIn("Signed by:", output)
 
 
 if __name__ == "__main__":

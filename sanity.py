@@ -49,7 +49,8 @@ class Adb:
         cmd = self._base + list(args)
         try:
             r = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout)
+                cmd, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=timeout)
         except FileNotFoundError:
             raise AdbError(f"adb binary not found: {self.binary}")
         except subprocess.TimeoutExpired:
@@ -204,7 +205,7 @@ def parse_regex_list(path: Path) -> list[tuple[re.Pattern, str]]:
             line = line.rstrip("\n")
             if line.startswith("#") or not line.strip():
                 continue
-            m = re.match(r"^(.+?)\s{2,}\|\s*(.*)$", line)
+            m = re.match(r"^(.+?)\s+\|\s*(.*)$", line)
             if m:
                 pattern = m.group(1).strip()
                 why = m.group(2).strip()
@@ -285,6 +286,32 @@ def journal_read(device_id: str) -> list[dict]:
             if line:
                 entries.append(json.loads(line))
     return entries
+
+
+def pending_restores(journal: list[dict]) -> dict[str, dict[str, int]]:
+    """Replay successful actions, retaining each still-needed inverse."""
+    pending: dict[str, dict[str, int]] = {}
+    for position, entry in enumerate(journal):
+        package = entry.get("package")
+        action = entry.get("action")
+        if action in ("disable-user", "uninstall-user"):
+            pending.setdefault(package, {})[action] = position
+        elif action == "restore" and not entry.get("error") and entry.get("success") is not False:
+            method = entry.get("method")
+            if method is None:
+                # Earlier versions recorded only whole-package restores.
+                pending.pop(package, None)
+            elif package in pending:
+                pending[package].pop(method, None)
+                if not pending[package]:
+                    del pending[package]
+    return pending
+
+
+def validate_package_name(package: str):
+    if not isinstance(package, str) or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", package):
+        raise ValueError(f"Invalid package name: {package!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -516,32 +543,30 @@ def cmd_triage(adb: Adb, lists: dict, args):
 
 def cmd_apply(adb: Adb, lists: dict, args):
     plan_file = args.plan
-    if not os.path.isfile(plan_file):
+    if not plan_file:
         dev_id = adb.device_id()
-        alt = state_dir_for(dev_id) / "plan.txt"
-        if alt.exists():
-            plan_file = str(alt)
-        else:
-            print(f"[!!] Plan file not found: {plan_file}")
-            sys.exit(1)
+        plan_file = state_dir_for(dev_id) / "plan.txt"
+    if not os.path.isfile(plan_file):
+        print(f"[!!] Plan file not found: {plan_file}")
+        sys.exit(1)
 
     with open(plan_file) as f:
         lines = f.readlines()
 
     targets = []
-    for line in lines:
+    for line_number, line in enumerate(lines, 1):
         line = line.strip()
-        if not line or line.startswith("##"):
+        if not line or line.startswith("#"):
             continue
-        if line.startswith("# force:"):
-            pkg = line[len("# force:"):].split("#")[0].strip()
-            targets.append(("force", pkg))
-        elif line.startswith("#"):
-            continue
-        else:
-            pkg = line.split("#")[0].strip()
-            if pkg:
-                targets.append(("normal", pkg))
+        line = line.split("#", 1)[0].strip()
+        mode = "force" if line.startswith("force:") else "normal"
+        pkg = line[len("force:"):].strip() if mode == "force" else line
+        try:
+            validate_package_name(pkg)
+        except ValueError as e:
+            print(f"[!!] {plan_file}:{line_number}: {e}")
+            sys.exit(1)
+        targets.append((mode, pkg))
 
     if not targets:
         print("[!!] No packages to apply. Is the plan empty?")
@@ -551,80 +576,78 @@ def cmd_apply(adb: Adb, lists: dict, args):
     print()
 
     dev_id = adb.device_id()
-    never_patterns = lists["never"]
-
     ok = 0
     skipped = 0
     failed = 0
 
     for mode, pkg in targets:
-        for pat, why in never_patterns:
-            if pat.search(pkg):
-                print(f"  [!!] REFUSED {pkg} -- protected: {why}")
-                skipped += 1
-                break
-        else:
-            if mode == "force":
-                cl = classify(pkg, lists)
-                if cl["action"] == "guard":
-                    print(f"  [**] FORCE  {pkg} (guarded: {cl.get('reason', '')})")
-                else:
-                    print(f"  [**] FORCE  {pkg}")
+        cl = classify(pkg, lists)
+        if cl["action"] == "never":
+            print(f"  [!!] REFUSED {pkg} -- protected: {cl.get('reason', '')}")
+            skipped += 1
+            continue
+        if cl["action"] == "guard" and mode != "force":
+            print(f"  [!!] REFUSED {pkg} -- guarded; requires force: prefix")
+            skipped += 1
+            continue
+        if mode == "force":
+            print(f"  [**] FORCE  {pkg}")
 
-            try:
-                if args.uninstall:
-                    result = adb.pm_uninstall_user(pkg)
-                else:
-                    result = adb.pm_disable(pkg)
-                method = "uninstall-user" if args.uninstall else "disable-user"
-                print(f"  [OK] {pkg}: {result}")
-                journal_append(dev_id, {
-                    "action": method, "package": pkg,
-                    "mode": mode, "result": result,
-                })
-                ok += 1
-            except AdbError as e:
-                print(f"  [!!] {pkg}: {e}")
-                journal_append(dev_id, {
-                    "action": "error", "package": pkg,
-                    "mode": mode, "error": str(e),
-                })
-                failed += 1
+        try:
+            if args.uninstall:
+                result = adb.pm_uninstall_user(pkg)
+            else:
+                result = adb.pm_disable(pkg)
+            method = "uninstall-user" if args.uninstall else "disable-user"
+            print(f"  [OK] {pkg}: {result}")
+            journal_append(dev_id, {
+                "action": method, "package": pkg,
+                "mode": mode, "result": result,
+            })
+            ok += 1
+        except AdbError as e:
+            print(f"  [!!] {pkg}: {e}")
+            journal_append(dev_id, {
+                "action": "error", "package": pkg,
+                "mode": mode, "error": str(e),
+            })
+            failed += 1
 
     print()
     print(f"  Done: {ok} ok, {skipped} refused, {failed} failed")
+    if failed:
+        sys.exit(1)
 
 
 def cmd_restore(adb: Adb, lists: dict, args):
-    dev_id = adb.device_id()
-    journal = journal_read(dev_id)
-
-    if args.package:
-        targets = [args.package]
-    elif args.last:
-        disabled = [
-            e["package"] for e in reversed(journal)
-            if e.get("action") in ("disable-user", "uninstall-user")
-        ]
-        seen = set()
-        targets = []
-        for p in disabled:
-            if p not in seen:
-                seen.add(p)
-                targets.append(p)
-            if len(targets) >= args.last:
-                break
-    elif args.all:
-        disabled = set()
-        for e in journal:
-            if e.get("action") in ("disable-user", "uninstall-user"):
-                disabled.add(e["package"])
-            elif e.get("action") in ("restore",):
-                disabled.discard(e.get("package"))
-        targets = sorted(disabled)
-    else:
-        print("[!!] Specify --package, --last N, or --all")
+    if sum((args.package is not None, args.last is not None, bool(args.all))) != 1:
+        print("[!!] Specify exactly one of --package, --last N, or --all")
         sys.exit(1)
+    if args.last is not None and args.last <= 0:
+        print("[!!] --last must be a positive number")
+        sys.exit(1)
+
+    dev_id = adb.device_id()
+    pending = pending_restores(journal_read(dev_id))
+
+    if args.package is not None:
+        targets = [args.package]
+    elif args.last is not None:
+        targets = sorted(pending, key=lambda pkg: max(pending[pkg].values()),
+                         reverse=True)[:args.last]
+    else:
+        targets = list(pending)
+
+    for pkg in targets:
+        try:
+            validate_package_name(pkg)
+        except ValueError as e:
+            print(f"[!!] {e}")
+            sys.exit(1)
+        if pkg not in pending:
+            print(f"[!!] No pending journal action for {pkg}; "
+                  "inspect its installed/enabled state before manual recovery.")
+            sys.exit(1)
 
     if not targets:
         print("[!!] Nothing to restore")
@@ -633,21 +656,34 @@ def cmd_restore(adb: Adb, lists: dict, args):
     print(f"=== RESTORE ({len(targets)} packages) ===")
     print()
 
+    failed = 0
     for pkg in targets:
-        try:
-            r1 = adb.pm_enable(pkg)
-            print(f"  [OK] enable  {pkg}: {r1}")
-        except AdbError:
-            pass
-        try:
-            r2 = adb.pm_install_existing(pkg)
-            print(f"  [OK] reinstall {pkg}: {r2}")
-        except AdbError:
-            pass
-        journal_append(dev_id, {"action": "restore", "package": pkg})
+        for method in sorted(pending[pkg], key=pending[pkg].get, reverse=True):
+            inverse = "enable" if method == "disable-user" else "install-existing"
+            try:
+                if method == "disable-user":
+                    result = adb.pm_enable(pkg)
+                else:
+                    result = adb.pm_install_existing(pkg)
+            except AdbError as e:
+                print(f"  [!!] {inverse} {pkg}: {e}")
+                journal_append(dev_id, {
+                    "action": "restore-error", "package": pkg,
+                    "method": method, "error": str(e),
+                })
+                failed += 1
+                break
+            print(f"  [OK] {inverse} {pkg}: {result}")
+            journal_append(dev_id, {
+                "action": "restore", "package": pkg, "method": method,
+                "success": True, "result": result,
+            })
 
     print()
-    print("  Restored. Reboot to be sure.")
+    if failed:
+        print(f"  {failed} package(s) still pending; retry restore after resolving errors.")
+        sys.exit(1)
+    print("  Recorded changes restored. Reboot and test.")
 
 
 def cmd_home(adb: Adb, lists: dict, args):
@@ -766,10 +802,11 @@ def main():
                          help="Use pm uninstall -k --user 0 instead of disable")
 
     p_restore = sub.add_parser("restore", help="Re-enable packages")
-    p_restore.add_argument("--package", help="Restore one package by name")
-    p_restore.add_argument("--last", type=int, help="Restore the last N")
-    p_restore.add_argument("--all", action="store_true",
-                           help="Restore everything from the journal")
+    restore_target = p_restore.add_mutually_exclusive_group(required=True)
+    restore_target.add_argument("--package", help="Restore one pending package by name")
+    restore_target.add_argument("--last", type=int, help="Restore the last N pending packages")
+    restore_target.add_argument("--all", action="store_true",
+                               help="Restore everything pending in the journal")
 
     p_home = sub.add_parser("home", help="Set the default launcher")
     p_home.add_argument("--launcher", required=True,

@@ -1,12 +1,37 @@
 # desjoyed-sanity
 
-Reversible debloat toolkit for FYT-lineage Android head units (Joying,
-Joyforwa, Eonon, Dasaita, and other QCM6490/SM6375/T7862 units that
-run FYT/SYU firmware).
+Stock-firmware customization workbench for FYT-lineage Android head units,
+with a reversible debloat toolkit. The first bootloader milestone collects
+device evidence, inspects boot images, and preserves stock images before
+any root or firmware work.
 
-**Nothing touches the system partition.** Every disable is reversible
-with `pm enable` or `pm install-existing`. The toolkit records what it
-does in a per-device journal so you can undo any step.
+`boottool.py` reads the device and prepares local files; it never flashes,
+unlocks, roots, or reboots. `sanity.py` changes package state and journals
+those changes. Disables can be reversed; uninstall recovery requires the
+package APK to remain available on the device.
+
+## Start with the bootloader workbench
+
+The chosen direction is stock firmware plus root and systemless customization,
+preserving the vendor hardware support. An unlocked bootloader permits custom
+images; it does not identify which image, partition, or slot to use.
+
+```bash
+# Collect a read-only device snapshot; add --serial SERIAL if needed
+python boottool.py probe -o device.json
+
+# Inspect an image extracted from the exact unit's stock firmware
+python boottool.py image firmware/boot.img --json
+
+# Preserve that explicitly selected input in a new local workspace
+python boottool.py prepare --device device.json --image firmware/boot.img --partition boot -o workspaces/stock
+```
+
+`boot` is an example selection, not an automatic recommendation. Depending on
+the actual device, the ramdisk may be in `boot`, `init_boot`, `vendor_boot`, or
+`recovery`. The workspace contains the original bytes, a `manifest.json`, and
+`NEXT_STEPS.md`. Preparation does **not** certify compatibility or generate
+flashing commands. See [the workflow](docs/boot-workflow.md).
 
 ## What it does
 
@@ -22,12 +47,14 @@ does in a per-device journal so you can undo any step.
 
 ## Hardware target
 
-Developed for the **Joying JY-UTS18N12** (QCM6490, Android 13,
-12GB/256GB) but the lists and logic apply to any FYT-lineage unit.
+The original target is the **Joying JY-UTS18N12** (QCM6490, Android 13,
+12GB/256GB). The new workbench has synthetic test coverage, but no real device
+or stock image has yet been validated in this development session. Treat
+other models as separate compatibility investigations.
 The `never.txt` protection list covers both FYT/SYU and MTC/Microntek
 MCU bridges.
 
-## Quick start
+## Debloat workflow
 
 ```bash
 # 1. Connect via ADB (USB-A to USB-A, toggle USB role to Device)
@@ -70,8 +97,8 @@ python3 sanity.py restore --last 1
 **on** = triage enables them by default.
 **off** = triage comments them out; uncomment what you want.
 
-`never.txt` and `guard.txt` are not tiers; they are protection and
-caution layers that override everything else.
+`never.txt` is an absolute protection layer. Explicit tier entries take
+precedence over `guard.txt`; otherwise guard matches require `force:`.
 
 ## Safety rails
 
@@ -84,8 +111,9 @@ caution layers that override everything else.
    `force:` prefix. You have to explicitly uncomment them and keep the
    `force:` prefix for `apply` to process them.
 
-3. **Journal**: every action is logged to `state/<device-hash>/journal.jsonl`
-   with timestamps. `restore --all` undoes everything in the journal.
+3. **Journal**: actions are logged to `state/<device-hash>/journal.jsonl`
+   with timestamps. `restore --all` retries pending operations; failed restores
+   stay pending. `restore --last N` selects the most recent still-pending packages.
 
 ## Firmware tools
 
@@ -106,24 +134,23 @@ python3 fwtool.py sigcheck update_car.zip
 See [docs/firmware.md](docs/firmware.md) for details on the firmware
 format, signing, and flashing.
 
-## Magisk boot scripts
+## Experimental Magisk boot scripts
 
-Copy the scripts from `magisk/service.d/` to `/data/adb/service.d/`
-on the head unit:
-
-```bash
-adb push magisk/service.d/*.sh /data/adb/service.d/
-adb shell chmod 755 /data/adb/service.d/*.sh
-```
+The original scripts in `magisk/service.d/` need a separate device-tested
+revision before deployment. `20-adb-secure.sh` does not restart an already-running
+ADB daemon, and `10-hosts.sh` skips its blocklist when the hosts file exists.
+The workbench does not install them. Changing a security property alone is not
+evidence that ADB now requires authentication.
 
 | Script | What |
 |---|---|
 | `10-hosts.sh` | Block telemetry domains via /etc/hosts |
-| `20-adb-secure.sh` | Fix the open-ADB-to-everyone problem |
+| `20-adb-secure.sh` | Experimental ADB authentication property change |
 | `30-disable-analytics.sh` | Opt out of usage stats and crash reporting |
 
 ## Docs
 
+- [docs/boot-workflow.md](docs/boot-workflow.md) — device evidence, stock images, and next steps toward root
 - [docs/adb-setup.md](docs/adb-setup.md) — ADB connection, wireless ADB, USB role toggle
 - [docs/foss-stack.md](docs/foss-stack.md) — FOSS replacements to install before debloating
 - [docs/firmware.md](docs/firmware.md) — Firmware format, signing, flashing, Magisk
@@ -134,6 +161,13 @@ adb shell chmod 755 /data/adb/service.d/*.sh
 - Python 3.10+
 - ADB (Android SDK platform-tools)
 - An FYT-lineage Android head unit with USB or wireless ADB access
+
+Offline image inspection and preparation do not require ADB. Tests use synthetic
+images and simulated device responses:
+
+```bash
+python -m unittest discover -v
+```
 
 ## License
 

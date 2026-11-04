@@ -1,5 +1,9 @@
 # Firmware notes (FYT QCM6490)
 
+Start with [the boot workbench workflow](boot-workflow.md). The structures below
+are examples from the original project, not a verified description of every
+FYT package. Confirm them against the unit's actual stock firmware.
+
 ## Firmware zip format
 
 FYT firmware is distributed as `560-6490-YYYYMMDD.zip`, containing an
@@ -29,8 +33,8 @@ system.img              (or system.new.dat / system.transfer.list)
 The zip uses Android's whole-file v1 signature format:
 - PKCS#7 detached signature appended after the EOCD record
 - Comment field: `signed by SignApk\0` + PKCS#7 DER + 6-byte footer
-- The FYT updater trusts the **AOSP testkey** (the default key that
-  ships with the AOSP source tree). This is not a security mechanism.
+- Whether a particular updater trusts the AOSP testkey must be verified for
+  that firmware. A recognizable ZIP comment is not cryptographic verification.
 
 Use `fwtool.py sigcheck` to examine the signature, and
 `fwtool.py inspect` to list contents.
@@ -46,49 +50,42 @@ not enforced by the bootloader.
 
 ## Flashing
 
-1. Download the firmware zip (outer zip)
-2. Extract `update_car.zip` from it (do NOT unzip update_car.zip itself)
-3. Copy `update_car.zip` to a FAT32-formatted USB drive (under 32 GB)
-4. Insert the USB drive into the head unit's USB port
-5. The updater should detect it and offer to flash
-6. Flashing wipes user data
+Use the exact unit's vendor procedure and matching firmware. USB update behavior,
+accepted package layout, data wiping, fastboot support and recovery differ by
+unit. The workbench does not execute flashing or provide a generic command as a
+device-specific procedure.
 
 ## Modifying firmware
 
 Use `fwtool.py strip` to remove entries (e.g., bloatware APKs from
 `owner_apk/`). The output zip will not be signed; if the updater
-checks the signature, re-sign with the AOSP testkey:
+checks the signature, a whole-file signature from a key that updater trusts is
+required. For AOSP SignApk, whole-file signing uses `-w`:
 
 ```bash
 # Build signapk from AOSP source, or use the one from
 # https://github.com/nickel-coder/signapk (jar + keys)
-java -jar signapk.jar \
+java -jar signapk.jar -w \
   aosp-testkey.x509.pem aosp-testkey.pk8 \
   stripped.zip signed.zip
 ```
 
-The AOSP testkey is public. Using it does not add security; it satisfies
-the format check.
+The AOSP testkey is public. A package signed with it is not thereby compatible,
+trusted by a particular unit, or safe to flash. See
+[AOSP OTA signing](https://source.android.com/docs/core/ota/sign_builds).
 
 ## Boot image
 
-The boot image uses the standard Android boot image header. Check
-`header_version` at offset 40 to know the format. AVB (Android Verified
-Boot) metadata may be present as a footer (magic `AVBf` in the last 64
-bytes) and in vbmeta (magic `AVB0`). With the bootloader unlocked and
-vbmeta patched (flags at offset 120), the chain of trust is already
-broken, so Magisk patching works.
+Use `python boottool.py image IMAGE --json` to distinguish Android boot and
+vendor boot formats. Their header fields differ; inspecting a hard-coded offset
+without checking the image magic is insufficient. AVB metadata markers do not
+prove signature validity. The tool does not modify vbmeta or infer that a
+patched image will boot merely because the bootloader reports unlocked.
 
 ## Magisk
 
-To root: extract `boot.img` from `update_car.zip`, transfer to a phone
-or the head unit itself, patch with Magisk Manager, flash the patched
-image via fastboot.
-
-```bash
-adb push boot.img /sdcard/Download/
-# Patch in Magisk Manager: Install > Select and Patch a File > boot.img
-adb pull /sdcard/Download/magisk_patched-*.img
-fastboot flash boot magisk_patched-*.img
-fastboot reboot
-```
+Patch the correct stock image on the same target device, after identifying its
+ramdisk layout. The appropriate image can be `boot`, `init_boot`, `vendor_boot`,
+or `recovery`; an Android version label does not decide this. Preserve the stock
+image and establish a recovery procedure before reviewing any flash command.
+See [Magisk installation](https://topjohnwu.github.io/Magisk/install.html).
