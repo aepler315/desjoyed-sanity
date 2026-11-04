@@ -51,6 +51,8 @@ package:/system/app/QtiDevStats.apk=com.qualcomm.qti.devicestatisticsservice ver
 package:/data/app/org.fdroid.fdroid/base.apk=org.fdroid.fdroid versionCode:1019 uid:10400
 package:/system/app/AdupsFota.apk=com.adups.fota versionCode:1 uid:10500
 package:/system/app/Chrome.apk=com.android.chrome versionCode:120 uid:10600
+package:/system/priv-app/CarLauncher.apk=com.car.launcher versionCode:1 uid:10700
+package:/data/app/app.lawnchair/base.apk=app.lawnchair versionCode:14 uid:10800
 """
 
 PACKAGES_MALWARE = PACKAGES_DEFAULT + """\
@@ -110,7 +112,15 @@ def handle_shell(cmd: str):
             print("dns.quad9.net")
         else:
             print("null")
-    elif cmd.startswith("cmd package"):
+    elif cmd.startswith("cmd role get-role-holders"):
+        print("com.car.launcher")
+    elif cmd.startswith("cmd role add-role-holder"):
+        pass
+    elif cmd.startswith("cmd package resolve-activity"):
+        parts = cmd.split()
+        pkg = parts[-1] if parts else "unknown"
+        print(f"  name={pkg}/{pkg}.HomeActivity")
+    elif cmd.startswith("cmd package set-home-activity"):
         print("Activity set as home.")
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

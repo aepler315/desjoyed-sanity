@@ -286,6 +286,57 @@ class TestApply(unittest.TestCase):
             self.assertIn("com.syu.somethingelse", pkgs)
 
 
+class TestHome(unittest.TestCase):
+
+    def test_home_show(self):
+        adb = FakeAdb()
+        lists = sanity.load_all_lists(LISTS_DIR)
+        args = type("Args", (), {"show": True, "launcher": None})()
+        sanity.cmd_home(adb, lists, args)
+
+    def test_home_set(self):
+        adb = FakeAdb()
+        lists = sanity.load_all_lists(LISTS_DIR)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                args = type("Args", (), {
+                    "show": False, "launcher": "app.lawnchair"
+                })()
+                sanity.cmd_home(adb, lists, args)
+                journal = sanity.journal_read(adb.device_id())
+            entries = [e for e in journal if e.get("action") == "set-home"]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(entries[0]["package"], "app.lawnchair")
+            self.assertEqual(entries[0]["previous"], "com.car.launcher")
+
+    def test_home_not_installed(self):
+        adb = FakeAdb()
+        lists = sanity.load_all_lists(LISTS_DIR)
+        args = type("Args", (), {
+            "show": False, "launcher": "com.doesnt.exist"
+        })()
+        with self.assertRaises(SystemExit):
+            sanity.cmd_home(adb, lists, args)
+
+    def test_home_already_default(self):
+        adb = FakeAdb()
+        lists = sanity.load_all_lists(LISTS_DIR)
+        args = type("Args", (), {
+            "show": False, "launcher": "com.car.launcher"
+        })()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(sanity, "STATE_DIR", Path(tmpdir)):
+                sanity.cmd_home(adb, lists, args)
+                journal = sanity.journal_read(adb.device_id())
+            entries = [e for e in journal if e.get("action") == "set-home"]
+            self.assertEqual(len(entries), 0)
+
+    def test_get_current_launcher(self):
+        adb = FakeAdb()
+        current = sanity._get_current_launcher(adb)
+        self.assertEqual(current, "com.car.launcher")
+
+
 class TestRestore(unittest.TestCase):
 
     def test_restore_last(self):

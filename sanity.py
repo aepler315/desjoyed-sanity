@@ -650,26 +650,88 @@ def cmd_restore(adb: Adb, lists: dict, args):
     print("  Restored. Reboot to be sure.")
 
 
+def _get_current_launcher(adb: Adb) -> Optional[str]:
+    """Detect the current default Home app via Role API or resolve-activity."""
+    try:
+        r = adb.shell(
+            "cmd role get-role-holders android.app.role.HOME", check=False)
+        holders = r.stdout.strip()
+        if holders and r.returncode == 0:
+            cleaned = holders.strip("[]").split(",")[0].strip()
+            if cleaned and cleaned != "null":
+                return cleaned
+    except AdbError:
+        pass
+    try:
+        r = adb.shell(
+            "cmd package resolve-activity"
+            " -a android.intent.action.MAIN"
+            " -c android.intent.category.HOME",
+            check=False)
+        for line in r.stdout.splitlines():
+            if "name=" in line:
+                return line.split("name=")[1].strip().split("/")[0]
+    except AdbError:
+        pass
+    return None
+
+
 def cmd_home(adb: Adb, lists: dict, args):
+    """Set or show the default launcher (Home app)."""
+
+    # --show: just print the current launcher and exit
+    if args.show:
+        print("=== CURRENT LAUNCHER ===")
+        print()
+        current = _get_current_launcher(adb)
+        if current:
+            cls = classify(current, lists)
+            label = cls.get("tier", cls["action"])
+            print(f"  {current}  ({label})")
+        else:
+            print("  [??] Could not detect current launcher")
+        return
+
     launcher = args.launcher
     if not launcher:
-        print("[!!] --launcher <package> required")
-        print("     Example: sanity.py home --launcher net.nicbell.lawnchair")
+        print("[!!] --launcher <package> required (or use --show)")
         sys.exit(1)
 
     print(f"=== SET HOME: {launcher} ===")
     print()
 
+    # Pre-flight: is the target launcher actually installed?
+    installed = {p["name"] for p in adb.pm_list()}
+    if launcher not in installed:
+        print(f"  [!!] {launcher} is not installed on this device")
+        print(f"  Install it first:  adb install <path-to-apk>")
+        sys.exit(1)
+
+    current = _get_current_launcher(adb)
+    if current:
+        print(f"  Current launcher: {current}")
+    if current and current == launcher:
+        print(f"  [OK] {launcher} is already the default Home")
+        return
+
+    # Strategy 1: Role API (Android 10+, most reliable)
+    ok = False
     try:
         r = adb.shell(
-            f"cmd package set-home-activity {launcher}/.DefaultActivity",
+            f"cmd role add-role-holder android.app.role.HOME {launcher}",
             check=False)
-        if r.returncode == 0:
-            print(f"  [OK] {r.stdout.strip()}")
-        else:
-            print(f"  Trying resolve-activity fallback...")
+        if r.returncode == 0 and "error" not in r.stdout.lower():
+            ok = True
+            print(f"  [OK] Role API accepted {launcher}")
+    except AdbError:
+        pass
+
+    # Strategy 2: set-home-activity with resolved activity name
+    if not ok:
+        try:
             r2 = adb.shell(
-                f"cmd package resolve-activity -c android.intent.category.HOME {launcher}",
+                f"cmd package resolve-activity"
+                f" -c android.intent.category.HOME {launcher}",
                 check=False)
             activity = ""
             for line in r2.stdout.splitlines():
@@ -677,14 +739,65 @@ def cmd_home(adb: Adb, lists: dict, args):
                     activity = line.split("name=")[1].strip()
                     break
             if activity:
-                r3 = adb.shell(f"cmd package set-home-activity {activity}")
-                print(f"  [OK] {r3.stdout.strip()}")
-            else:
-                print(f"  [!!] Could not resolve home activity for {launcher}")
-                print("  Set it manually: Settings > Apps > Default apps > Home")
-    except AdbError as e:
-        print(f"  [!!] {e}")
+                r3 = adb.shell(
+                    f"cmd package set-home-activity {activity}",
+                    check=False)
+                if r3.returncode == 0:
+                    ok = True
+                    print(f"  [OK] set-home-activity {activity}")
+        except AdbError:
+            pass
+
+    # Strategy 3: guess the conventional activity name
+    if not ok:
+        try:
+            r4 = adb.shell(
+                f"cmd package set-home-activity"
+                f" {launcher}/{launcher}.MainActivity",
+                check=False)
+            if r4.returncode == 0:
+                ok = True
+                print(f"  [OK] set-home-activity {launcher}/.MainActivity")
+        except AdbError:
+            pass
+
+    if not ok:
+        print(f"  [!!] Could not set {launcher} as Home programmatically")
         print("  Set it manually: Settings > Apps > Default apps > Home")
+        return
+
+    # Verify the change actually stuck
+    new_home = _get_current_launcher(adb)
+    if new_home and launcher in new_home:
+        print(f"  [OK] Verified: default Home is now {new_home}")
+    else:
+        actual = new_home or "unknown"
+        print(f"  [??] Verify: launcher reads as '{actual}'")
+        print("       Press the Home button to confirm which app opens")
+
+    journal_append(adb.device_id(), {
+        "action": "set-home",
+        "package": launcher,
+        "previous": current or "unknown",
+    })
+
+    # Safety advice about the old factory launcher
+    print()
+    if current and current != launcher:
+        pkg_base = current.split("/")[0]
+        cls = classify(pkg_base, lists)
+        if cls["action"] == "never":
+            print(f"  Factory launcher ({pkg_base}) is PROTECTED.")
+            print("  Leave it — it's tied to platform services.")
+        else:
+            print(f"  Before disabling the factory launcher ({pkg_base}):")
+            print("    1. Reboot and confirm the new launcher survives it")
+            print("    2. Test the physical Home button / gesture")
+            print("    3. Test ACC off -> on (sleep/wake cycle)")
+            if cls["action"] == "guard":
+                print(f"  Then add to your plan:  force: {pkg_base}")
+            else:
+                print(f"  Then add to your plan:  {pkg_base}")
 
 
 def cmd_dns(adb: Adb, lists: dict, args):
@@ -771,9 +884,11 @@ def main():
     p_restore.add_argument("--all", action="store_true",
                            help="Restore everything from the journal")
 
-    p_home = sub.add_parser("home", help="Set the default launcher")
-    p_home.add_argument("--launcher", required=True,
+    p_home = sub.add_parser("home", help="Set or show the default launcher")
+    p_home.add_argument("--launcher",
                         help="Package name of the new launcher")
+    p_home.add_argument("--show", action="store_true",
+                        help="Show the current default launcher and exit")
 
     p_dns = sub.add_parser("dns", help="Set private DNS")
     p_dns.add_argument("--server", default="dns.quad9.net",
